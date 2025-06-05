@@ -1,2 +1,2 @@
-# io-ppp
-Push/Pull/Poll Model for io
+# tripio
+Push/Pull/Poll Model for io-stream
