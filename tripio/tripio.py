@@ -1,12 +1,7 @@
 import asyncio
 import queue
-import random
-import signal
-import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
-import time
-from typing import Any
+from typing import Any, Optional, Union
 import serial_asyncio
 
 
@@ -17,19 +12,23 @@ class IoLoopMeta(type):
     life time follow the last of task
     """
 
-    global IoLoop
     _thread = None
     _loop = None
     _lock = threading.Lock()
+    recv_queue: queue.Queue[bytes]
 
     def __call__(cls, *args: Any, **kwargs: Any):
+        cls.recv_queue: queue.Queue[bytes]
         # 確保 thread 只建一次
         with cls._lock:
             if cls._thread is None:
                 # 建 thread
                 cls._loop = asyncio.new_event_loop()
                 cls._thread = threading.Thread(
-                    target=cls._start_loop, args=(cls._loop,), daemon=True
+                    target=cls._start_loop,
+                    args=(cls._loop,),
+                    daemon=True,
+                    name="IoLoop",
                 )
                 cls._thread.start()
         # 返回正常 class 實例
@@ -41,37 +40,30 @@ class IoLoopMeta(type):
         loop.run_forever()
 
 
-class SerialProtocol(asyncio.Protocol):
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        print("serialport opened:", transport)
-        return super().connection_made(transport)
-
-    def data_received(self, data):
-        print("data received:", data.decode().strip())
-
-    def eof_received(self):
-        print("got eof")
-
-    def connection_lost(self, exc):
-        print("serial port closed")
-
-
 class Tripio(metaclass=IoLoopMeta):
-    async def open_async(self, port, baud):
-        loop = asyncio.get_running_loop()
-        transport, port = await serial_asyncio.create_serial_connection(
-            loop, SerialProtocol, port, baud
-        )
-        return transport
+    class SerialProtocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            print("serialport opened:", transport)
+            return super().connection_made(transport)
 
-    def open(self, port, baud):
-        loop = asyncio.get_event_loop()
-        task = loop.create_task(
-            serial_asyncio.create_serial_connection(
-                loop, SerialProtocol, port, baud
-            )
+        def data_received(self, data: bytes):
+            print("data received:", data.decode().strip())
+
+        def eof_received(self):
+            print("got eof")
+
+        def connection_lost(self, exc: Optional[Exception]):
+            print("serial port closed")
+
+    def open(self, port: str, baud: int):
+        coro = serial_asyncio.create_serial_connection(
+            self._loop, Tripio.SerialProtocol, port, baud
         )
-        return loop.gather(task)
+        task = self._loop.create_task(coro)
+        f = asyncio.run_coroutine_threadsafe(coro, type(self)._loop)
+        return f
+
+    def close(self): ...
 
 
 def main():
